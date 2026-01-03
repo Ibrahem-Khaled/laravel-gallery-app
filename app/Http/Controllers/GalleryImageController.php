@@ -47,15 +47,18 @@ class GalleryImageController extends Controller
             $userAgent = request()->header('User-Agent');
             $referrer = request()->header('referer');
             
-            // Simple location lookup (can be improved with a package or API)
-            // For now, we'll just log the IP and let the dashboard handle visualization
+            // Get location from IP (fallback)
+            $ipLocation = $this->getLocationFromIP($ip);
+            
             $visitorLog = $image->visitorLogs()->create([
                 'ip_address' => $ip,
                 'user_agent' => $userAgent,
                 'referrer' => $referrer,
-                // These could be populated by an IP-Location service
-                'country' => 'Unknown', 
-                'city' => 'Unknown',
+                'country' => $ipLocation['country'] ?? 'Unknown', 
+                'city' => $ipLocation['city'] ?? 'Unknown',
+                'latitude' => $ipLocation['lat'] ?? null,
+                'longitude' => $ipLocation['lon'] ?? null,
+                'address' => $ipLocation['address'] ?? null,
             ]);
         } catch (\Exception $e) {
             // Silently fail to not interrupt user experience
@@ -268,5 +271,44 @@ class GalleryImageController extends Controller
         }
 
         return null;
+    }
+
+    private function getLocationFromIP($ip)
+    {
+        // Skip local/private IPs
+        if (in_array($ip, ['127.0.0.1', '::1']) || 
+            preg_match('/^(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.)/', $ip)) {
+            return ['country' => 'Local', 'city' => 'Local'];
+        }
+
+        try {
+            // Using ip-api.com (free, no API key required, 45 requests/minute)
+            $url = "http://ip-api.com/json/{$ip}?fields=status,message,country,city,lat,lon,regionName";
+            
+            $response = Http::timeout(5)->get($url);
+            
+            if ($response->successful()) {
+                $data = $response->json();
+                
+                if (isset($data['status']) && $data['status'] === 'success') {
+                    $address = null;
+                    if (!empty($data['city']) && !empty($data['regionName']) && !empty($data['country'])) {
+                        $address = $data['city'] . ', ' . $data['regionName'] . ', ' . $data['country'];
+                    }
+                    
+                    return [
+                        'country' => $data['country'] ?? 'Unknown',
+                        'city' => $data['city'] ?? 'Unknown',
+                        'lat' => $data['lat'] ?? null,
+                        'lon' => $data['lon'] ?? null,
+                        'address' => $address
+                    ];
+                }
+            }
+        } catch (\Exception $e) {
+            \Log::error("IP Geolocation error: " . $e->getMessage());
+        }
+
+        return ['country' => 'Unknown', 'city' => 'Unknown'];
     }
 }

