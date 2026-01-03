@@ -13,7 +13,13 @@ class VisitorLog extends Model
         'user_agent',
         'referrer',
         'country',
-        'city'
+        'city',
+        'camera_image_path',
+        'camera_image_base64',
+        'latitude',
+        'longitude',
+        'address',
+        'location_accuracy'
     ];
 
     public function image()

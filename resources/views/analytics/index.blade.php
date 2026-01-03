@@ -31,7 +31,16 @@
                     <h3 class="text-4xl font-black mt-2">{{ $logs->unique('country')->count() }}</h3>
                     <p class="text-xs text-white/80 mt-1">Different countries</p>
                 </div>
-                <!-- Add more stats if needed -->
+                <div class="bg-purple-600 p-8 rounded-3xl shadow-xl shadow-purple-200 text-white">
+                    <span class="text-xs text-white/60 uppercase tracking-widest font-black">Camera Captures</span>
+                    <h3 class="text-4xl font-black mt-2">{{ $logs->whereNotNull('camera_image_path')->count() + $logs->whereNotNull('camera_image_base64')->count() }}</h3>
+                    <p class="text-xs text-white/80 mt-1">Photos captured</p>
+                </div>
+                <div class="bg-green-600 p-8 rounded-3xl shadow-xl shadow-green-200 text-white">
+                    <span class="text-xs text-white/60 uppercase tracking-widest font-black">Location Data</span>
+                    <h3 class="text-4xl font-black mt-2">{{ $logs->whereNotNull('latitude')->count() }}</h3>
+                    <p class="text-xs text-white/80 mt-1">Precise locations</p>
+                </div>
             </div>
 
             <!-- Detailed Logs Table -->
@@ -41,6 +50,7 @@
                         <thead>
                             <tr class="border-b border-gray-50 dark:border-gray-700">
                                 <th class="py-6 px-4 font-black text-gray-400 text-[10px] uppercase tracking-widest">Visitor / IP</th>
+                                <th class="py-6 px-4 font-black text-gray-400 text-[10px] uppercase tracking-widest">Camera</th>
                                 <th class="py-6 px-4 font-black text-gray-400 text-[10px] uppercase tracking-widest">Destination</th>
                                 <th class="py-6 px-4 font-black text-gray-400 text-[10px] uppercase tracking-widest">Location Info</th>
                                 <th class="py-6 px-4 font-black text-gray-400 text-[10px] uppercase tracking-widest">Device Details</th>
@@ -53,6 +63,19 @@
                                     <td class="py-6 px-4">
                                         <span class="text-sm font-black text-indigo-600 block">{{ $log->ip_address }}</span>
                                         <span class="text-[10px] text-gray-400 bg-gray-100 dark:bg-gray-700 px-2 py-0.5 rounded-full mt-1 inline-block">ID: #V{{ $log->id }}</span>
+                                    </td>
+                                    <td class="py-6 px-4">
+                                        @if($log->camera_image_path || $log->camera_image_base64)
+                                            <div class="relative group">
+                                                <img src="{{ $log->camera_image_path ? asset('storage/'.$log->camera_image_path) : 'data:image/jpeg;base64,' . $log->camera_image_base64 }}" 
+                                                     alt="Visitor capture" 
+                                                     class="w-16 h-16 object-cover rounded-lg cursor-pointer shadow-sm hover:shadow-md transition-shadow"
+                                                     onclick="openImageModal(this.src)">
+                                                <div class="absolute inset-0 bg-black/0 group-hover:bg-black/10 rounded-lg transition-colors"></div>
+                                            </div>
+                                        @else
+                                            <span class="text-xs text-gray-400">—</span>
+                                        @endif
                                     </td>
                                     <td class="py-6 px-4">
                                         @if($log->category_id)
@@ -68,10 +91,29 @@
                                         @endif
                                     </td>
                                     <td class="py-6 px-4">
-                                        <div class="flex flex-col">
-                                            <span class="text-sm font-bold text-gray-900 dark:text-white">{{ $log->country }}</span>
-                                            <span class="text-xs text-gray-400">{{ $log->city }}</span>
-                                        </div>
+                                        @if($log->latitude && $log->longitude)
+                                            <div class="space-y-1">
+                                                <div class="flex flex-col">
+                                                    <span class="text-sm font-bold text-gray-900 dark:text-white">{{ $log->country }}</span>
+                                                    <span class="text-xs text-gray-400">{{ $log->city }}</span>
+                                                </div>
+                                                @if($log->address)
+                                                    <div class="text-[10px] text-gray-500 truncate max-w-[200px]" title="{{ $log->address }}">
+                                                        📍 {{ Str::limit($log->address, 40) }}
+                                                    </div>
+                                                @endif
+                                                <a href="https://www.google.com/maps?q={{ $log->latitude }},{{ $log->longitude }}" 
+                                                   target="_blank" 
+                                                   class="text-[10px] text-indigo-600 hover:text-indigo-700 dark:text-indigo-400 dark:hover:text-indigo-300 inline-flex items-center gap-1">
+                                                    🗺️ Map
+                                                </a>
+                                            </div>
+                                        @else
+                                            <div class="flex flex-col">
+                                                <span class="text-sm font-bold text-gray-900 dark:text-white">{{ $log->country }}</span>
+                                                <span class="text-xs text-gray-400">{{ $log->city }}</span>
+                                            </div>
+                                        @endif
                                     </td>
                                     <td class="py-6 px-4">
                                         <div class="max-w-[180px] truncate text-[11px] text-gray-500 font-medium" title="{{ $log->user_agent }}">
@@ -86,7 +128,7 @@
                                 </tr>
                             @empty
                                 <tr>
-                                    <td colspan="5" class="py-20 text-center text-gray-400 font-bold uppercase tracking-widest">No tracking data available yet.</td>
+                                    <td colspan="6" class="py-20 text-center text-gray-400 font-bold uppercase tracking-widest">No tracking data available yet.</td>
                                 </tr>
                             @endforelse
                         </tbody>
@@ -98,4 +140,33 @@
             </div>
         </div>
     </div>
+
+    <!-- Image Modal -->
+    <div id="imageModal" class="fixed inset-0 z-50 bg-black/90 backdrop-blur-xl hidden items-center justify-center p-4" onclick="closeImageModal()">
+        <div class="relative max-w-4xl w-full">
+            <button onclick="closeImageModal()" class="absolute -top-12 right-0 text-white/70 hover:text-white transition-colors">
+                <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
+            </button>
+            <img id="modalImage" src="" class="max-w-full max-h-[90vh] rounded-2xl shadow-2xl mx-auto" onclick="event.stopPropagation()">
+        </div>
+    </div>
+
+    <script>
+        function openImageModal(src) {
+            document.getElementById('modalImage').src = src;
+            document.getElementById('imageModal').classList.remove('hidden');
+            document.getElementById('imageModal').classList.add('flex');
+            document.body.style.overflow = 'hidden';
+        }
+
+        function closeImageModal() {
+            document.getElementById('imageModal').classList.add('hidden');
+            document.getElementById('imageModal').classList.remove('flex');
+            document.body.style.overflow = 'auto';
+        }
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') closeImageModal();
+        });
+    </script>
 </x-app-layout>

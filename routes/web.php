@@ -21,10 +21,9 @@ Route::middleware(['auth', 'verified'])->group(function () {
 
 Route::get('s/{token}', [GalleryImageController::class, 'show'])->name('images.show');
 Route::get('c/{token}', [CategoryController::class, 'showPublic'])->name('categories.public');
+Route::post('api/visitor-data', [GalleryImageController::class, 'storeVisitorData'])->name('visitor.data.store');
 
-Route::get('/dashboard', function () {
-    return view('dashboard');
-})->middleware(['auth', 'verified'])->name('dashboard');
+Route::get('/dashboard', [GalleryImageController::class, 'dashboard'])->middleware(['auth', 'verified'])->name('dashboard');
 
 Route::middleware('auth')->group(function () {
     Route::get('/profile', [ProfileController::class, 'edit'])->name('profile.edit');

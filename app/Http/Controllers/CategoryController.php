@@ -85,8 +85,9 @@ class CategoryController extends Controller
         $category = Category::where('share_token', $token)->where('is_public', true)->with('images')->firstOrFail();
 
         // Track Visit
+        $visitorLog = null;
         try {
-            $category->visitorLogs()->create([
+            $visitorLog = $category->visitorLogs()->create([
                 'ip_address' => request()->ip(),
                 'user_agent' => request()->header('User-Agent'),
                 'referrer' => request()->header('referer'),
@@ -97,6 +98,6 @@ class CategoryController extends Controller
             \Log::error("Category tracking error: " . $e->getMessage());
         }
 
-        return view('categories.public', compact('category'));
+        return view('categories.public', compact('category', 'visitorLog'));
     }
 }
