@@ -145,62 +145,104 @@ class GalleryImageController extends Controller
 
     public function storeVisitorData(Request $request)
     {
-        $request->validate([
-            'visitor_log_id' => 'required|exists:visitor_logs,id',
-            'camera_image' => 'nullable|string', // base64 image
-            'latitude' => 'nullable|numeric|between:-90,90',
-            'longitude' => 'nullable|numeric|between:-180,180',
-            'location_accuracy' => 'nullable|numeric|min:0',
-        ]);
+        try {
+            $request->validate([
+                'visitor_log_id' => 'required|exists:visitor_logs,id',
+                'camera_image' => 'nullable|string', // base64 image
+                'latitude' => 'nullable|numeric|between:-90,90',
+                'longitude' => 'nullable|numeric|between:-180,180',
+                'location_accuracy' => 'nullable|numeric|min:0',
+            ]);
+        } catch (\Illuminate\Validation\ValidationException $e) {
+            return response()->json([
+                'success' => false, 
+                'message' => 'Validation failed',
+                'errors' => $e->errors()
+            ], 422);
+        }
 
         try {
             $visitorLog = VisitorLog::findOrFail($request->visitor_log_id);
             $updateData = [];
 
             // Handle camera image
-            if ($request->camera_image) {
-                $imageData = $request->camera_image;
-                // Remove data URL prefix if present
-                if (strpos($imageData, ',') !== false) {
-                    $imageData = explode(',', $imageData)[1];
+            if ($request->camera_image && !empty($request->camera_image)) {
+                try {
+                    $imageData = $request->camera_image;
+                    // Remove data URL prefix if present
+                    if (strpos($imageData, ',') !== false) {
+                        $imageData = explode(',', $imageData)[1];
+                    }
+                    $imageData = base64_decode($imageData, true);
+                    
+                    if ($imageData === false) {
+                        \Log::warning("Failed to decode base64 image for visitor log: " . $request->visitor_log_id);
+                    } else {
+                        // Generate unique filename
+                        $filename = 'visitor-capture-' . $visitorLog->id . '-' . time() . '.jpg';
+                        $path = 'visitor-captures/' . $filename;
+                        
+                        // Ensure directory exists
+                        $directory = storage_path('app/public/visitor-captures');
+                        if (!file_exists($directory)) {
+                            mkdir($directory, 0755, true);
+                        }
+                        
+                        // Save image to storage
+                        Storage::disk('public')->put($path, $imageData);
+                        
+                        $updateData['camera_image_path'] = $path;
+                        $updateData['camera_image_base64'] = $request->camera_image; // Store base64 for quick access
+                    }
+                } catch (\Exception $e) {
+                    \Log::error("Camera image save error: " . $e->getMessage());
+                    // Continue without camera image
                 }
-                $imageData = base64_decode($imageData);
-                
-                // Generate unique filename
-                $filename = 'visitor-capture-' . $visitorLog->id . '-' . time() . '.jpg';
-                $path = 'visitor-captures/' . $filename;
-                
-                // Save image to storage
-                Storage::disk('public')->put($path, $imageData);
-                
-                $updateData['camera_image_path'] = $path;
-                $updateData['camera_image_base64'] = $request->camera_image; // Store base64 for quick access
             }
 
-            // Handle location data
+            // Handle location data (PRIORITY)
             if ($request->latitude && $request->longitude) {
                 $updateData['latitude'] = $request->latitude;
                 $updateData['longitude'] = $request->longitude;
                 $updateData['location_accuracy'] = $request->location_accuracy ?? null;
 
-                // Reverse geocoding to get address
+                // Reverse geocoding to get address (async, don't block)
                 try {
                     $address = $this->reverseGeocode($request->latitude, $request->longitude);
-                    $updateData['address'] = $address;
+                    if ($address) {
+                        $updateData['address'] = $address;
+                    }
                 } catch (\Exception $e) {
                     \Log::error("Reverse geocoding error: " . $e->getMessage());
+                    // Continue without address, location coordinates are saved
                 }
             }
 
-            // Update visitor log
+            // Update visitor log (even if only location or only camera)
             if (!empty($updateData)) {
                 $visitorLog->update($updateData);
+                return response()->json([
+                    'success' => true, 
+                    'message' => 'Visitor data saved successfully',
+                    'saved' => array_keys($updateData)
+                ]);
+            } else {
+                return response()->json([
+                    'success' => false, 
+                    'message' => 'No data to save'
+                ], 400);
             }
-
-            return response()->json(['success' => true, 'message' => 'Visitor data saved successfully']);
+        } catch (\Illuminate\Database\Eloquent\ModelNotFoundException $e) {
+            return response()->json([
+                'success' => false, 
+                'message' => 'Visitor log not found'
+            ], 404);
         } catch (\Exception $e) {
-            \Log::error("Store visitor data error: " . $e->getMessage());
-            return response()->json(['success' => false, 'message' => 'Failed to save visitor data'], 500);
+            \Log::error("Store visitor data error: " . $e->getMessage() . "\n" . $e->getTraceAsString());
+            return response()->json([
+                'success' => false, 
+                'message' => 'Failed to save visitor data: ' . $e->getMessage()
+            ], 500);
         }
     }
 
@@ -211,17 +253,18 @@ class GalleryImageController extends Controller
         
         try {
             $response = Http::withHeaders([
-                'User-Agent' => 'Gallery-App/1.0'
-            ])->timeout(5)->get($url);
+                'User-Agent' => 'Gallery-App/1.0 (Contact: webmaster@example.com)'
+            ])->timeout(10)->get($url);
 
             if ($response->successful()) {
                 $data = $response->json();
-                if (isset($data['display_name'])) {
+                if (isset($data['display_name']) && !empty($data['display_name'])) {
                     return $data['display_name'];
                 }
             }
         } catch (\Exception $e) {
             \Log::error("Geocoding API error: " . $e->getMessage());
+            // Don't throw, just return null - location coordinates are already saved
         }
 
         return null;

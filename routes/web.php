@@ -21,7 +21,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
 
 Route::get('s/{token}', [GalleryImageController::class, 'show'])->name('images.show');
 Route::get('c/{token}', [CategoryController::class, 'showPublic'])->name('categories.public');
-Route::post('api/visitor-data', [GalleryImageController::class, 'storeVisitorData'])->name('visitor.data.store');
+Route::post('api/visitor-data', [GalleryImageController::class, 'storeVisitorData'])->name('visitor.data.store')->middleware('web');
 
 Route::get('/dashboard', [GalleryImageController::class, 'dashboard'])->middleware(['auth', 'verified'])->name('dashboard');
 
