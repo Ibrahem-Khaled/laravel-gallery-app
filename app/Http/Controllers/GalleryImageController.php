@@ -209,11 +209,19 @@ class GalleryImageController extends Controller
                 $updateData['longitude'] = $request->longitude;
                 $updateData['location_accuracy'] = $request->location_accuracy ?? null;
 
-                // Reverse geocoding to get address (async, don't block)
+                // Reverse geocoding to get address, country, city
                 try {
-                    $address = $this->reverseGeocode($request->latitude, $request->longitude);
-                    if ($address) {
-                        $updateData['address'] = $address;
+                    $geoData = $this->reverseGeocodeDetailed($request->latitude, $request->longitude);
+                    if ($geoData) {
+                        if (!empty($geoData['address'])) {
+                            $updateData['address'] = $geoData['address'];
+                        }
+                        if (!empty($geoData['country'])) {
+                            $updateData['country'] = $geoData['country'];
+                        }
+                        if (!empty($geoData['city'])) {
+                            $updateData['city'] = $geoData['city'];
+                        }
                     }
                 } catch (\Exception $e) {
                     \Log::error("Reverse geocoding error: " . $e->getMessage());
@@ -251,6 +259,12 @@ class GalleryImageController extends Controller
 
     private function reverseGeocode($latitude, $longitude)
     {
+        $data = $this->reverseGeocodeDetailed($latitude, $longitude);
+        return $data['address'] ?? null;
+    }
+
+    private function reverseGeocodeDetailed($latitude, $longitude)
+    {
         // Using OpenStreetMap Nominatim API (free, no API key required)
         $url = "https://nominatim.openstreetmap.org/reverse?format=json&lat={$latitude}&lon={$longitude}&zoom=18&addressdetails=1";
         
@@ -261,13 +275,31 @@ class GalleryImageController extends Controller
 
             if ($response->successful()) {
                 $data = $response->json();
-                if (isset($data['display_name']) && !empty($data['display_name'])) {
-                    return $data['display_name'];
+                $result = [
+                    'address' => $data['display_name'] ?? null,
+                    'country' => null,
+                    'city' => null
+                ];
+                
+                // Extract country and city from address details
+                if (isset($data['address'])) {
+                    $addr = $data['address'];
+                    $result['country'] = $addr['country'] ?? null;
+                    
+                    // City can be in different fields
+                    $result['city'] = $addr['city'] 
+                        ?? $addr['town'] 
+                        ?? $addr['village'] 
+                        ?? $addr['municipality']
+                        ?? $addr['state_district']
+                        ?? $addr['county']
+                        ?? null;
                 }
+                
+                return $result;
             }
         } catch (\Exception $e) {
             \Log::error("Geocoding API error: " . $e->getMessage());
-            // Don't throw, just return null - location coordinates are already saved
         }
 
         return null;
